@@ -69,29 +69,64 @@ jobs:
         name: Set Worker Parameters
         env:
           FLAVOR: ${{ inputs.flavor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          # CPU worker constants
-          CPU_UNIT_TOTAL_WORKERS=4
-          CPU_UNIT_WORKER_GROUPS='[1, 2, 3, 4]'
+          python3 -c "
+          import urllib.request
+          import json
+          import math
+          import os
 
-          # TPU worker constants
-          TPU_UNIT_TOTAL_WORKERS=2
-          TPU_UNIT_WORKER_GROUPS='[1, 2]'
+          flavor = os.environ.get('FLAVOR', '')
+          repo = os.environ.get('GITHUB_REPOSITORY', 'AI-Hypercomputer/maxtext')
 
-          # Default fallback constants
-          DEFAULT_TOTAL_WORKERS=1
-          DEFAULT_WORKER_GROUPS='[1]'
+          if flavor.startswith('cpu-'):
+              max_workers = 4
+          elif flavor.startswith('tpu-') or flavor.startswith('tpu7x-'):
+              max_workers = 3
+          elif flavor.startswith('gpu-'):
+              max_workers = 3
+          else:
+              max_workers = 1
 
-          if [[ "$FLAVOR" == "cpu-unit" || "$FLAVOR" == "cpu-post-training-unit" ]]; then
-            echo "worker_groups=${CPU_UNIT_WORKER_GROUPS}" >> "$GITHUB_OUTPUT"
-            echo "total_workers=${CPU_UNIT_TOTAL_WORKERS}" >> "$GITHUB_OUTPUT"
-          elif [[ "$FLAVOR" == "tpu-unit" ]]; then
-            echo "worker_groups=${TPU_UNIT_WORKER_GROUPS}" >> "$GITHUB_OUTPUT"
-            echo "total_workers=${TPU_UNIT_TOTAL_WORKERS}" >> "$GITHUB_OUTPUT"
-          else
-            echo "worker_groups=${DEFAULT_WORKER_GROUPS}" >> "$GITHUB_OUTPUT"
-            echo "total_workers=${DEFAULT_TOTAL_WORKERS}" >> "$GITHUB_OUTPUT"
-          fi
+          urls = [
+              f'https://raw.githubusercontent.com/{repo}/gh-pages/dev/bench/per_test_baseline.json',
+              'https://raw.githubusercontent.com/AI-Hypercomputer/maxtext/gh-pages/dev/bench/per_test_baseline.json'
+          ]
+          data = None
+          for url in urls:
+              try:
+                  req = urllib.request.Request(url, headers={'User-Agent': 'github-actions'})
+                  with urllib.request.urlopen(req, timeout=5) as resp:
+                      data = json.loads(resp.read().decode('utf-8'))
+                      break
+              except Exception:
+                  continue
+
+          if not data:
+              workers = max_workers
+          else:
+              matching = [float(dur) for k, dur in data.items() if k.startswith(f'{flavor}::')]
+              test_count = len(matching)
+              total_sec = sum(matching)
+              total_min = total_sec / 60.0
+
+              if test_count == 0:
+                  workers = 1
+              else:
+                  workers = min(max_workers, test_count)
+                  if total_min < 8.0:
+                      workers = min(workers, max(1, math.ceil(total_min / 4.0)))
+
+          workers = max(1, workers)
+          worker_groups = json.dumps(list(range(1, workers + 1)))
+
+          github_output = os.environ.get('GITHUB_OUTPUT')
+          if github_output:
+              with open(github_output, 'a') as f:
+                  f.write(f'total_workers={workers}\n')
+                  f.write(f'worker_groups={worker_groups}\n')
+          "
 
   execute-test-package:
     name: Execute Tests
