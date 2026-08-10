@@ -1161,7 +1161,7 @@ class NNXDecoder(nnx.Module):
     """Get remat policy for jax.checkpoint."""
     policy = None
     cfg = self.config
-    if cfg.remat_policy != "none":
+    if cfg.remat_policy and cfg.remat_policy != "none":
       if cfg.remat_policy in {"minimal_with_context", "minimal_flash"}:
         if cfg.remat_policy == "minimal_flash":
           max_logging.log("WARNING: 'minimal_flash' will be deprecated soon, please use 'minimal_with_context' instead.")
@@ -2274,21 +2274,47 @@ class NNXDecoder(nnx.Module):
 
       cache_idx = cache_index_of[lyr]
       kv_cache = kv_caches[cache_idx] if kv_caches is not None else None
-      y, kv_cache = layer(
-          y,
-          decoder_segment_ids,
-          decoder_positions,
-          deterministic,
-          model_mode,
-          previous_chunk=previous_chunk,
-          slot=slot,
-          bidirectional_mask=bidirectional_mask_value,
-          kv_cache=kv_cache,
-          attention_metadata=attention_metadata,
-          per_layer_input=ple_slice,
-          shared_key=shared_key,
-          shared_value=shared_value,
-      )
+      policy = self.get_remat_policy()
+      prevent_cse = maxtext_utils.should_prevent_cse_in_remat(cfg)
+
+      # When activation rematerialization is enabled (e.g. remat_policy='full' or 'minimal'
+      # during training), wrap each unscanned layer in jax.checkpoint to prevent OOMs. When
+      # remat is disabled (remat_policy='none' or None), call the layer directly.
+      if cfg.remat_policy and cfg.remat_policy != "none":
+        y, kv_cache = self._apply_layer_with_remat(
+            layer,
+            y,
+            policy,
+            prevent_cse,
+            decoder_segment_ids=decoder_segment_ids,
+            decoder_positions=decoder_positions,
+            deterministic=deterministic,
+            model_mode=model_mode,
+            previous_chunk=previous_chunk,
+            slot=slot,
+            bidirectional_mask=bidirectional_mask_value,
+            kv_cache=kv_cache,
+            attention_metadata=attention_metadata,
+            per_layer_input=ple_slice,
+            shared_key=shared_key,
+            shared_value=shared_value,
+        )
+      else:
+        y, kv_cache = layer(
+            y,
+            decoder_segment_ids,
+            decoder_positions,
+            deterministic,
+            model_mode,
+            previous_chunk=previous_chunk,
+            slot=slot,
+            bidirectional_mask=bidirectional_mask_value,
+            kv_cache=kv_cache,
+            attention_metadata=attention_metadata,
+            per_layer_input=ple_slice,
+            shared_key=shared_key,
+            shared_value=shared_value,
+        )
       if kv_caches is not None and kv_cache is not None:
         kv_caches[cache_idx] = kv_cache
 
