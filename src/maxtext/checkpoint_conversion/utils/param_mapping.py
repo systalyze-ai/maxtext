@@ -3868,6 +3868,126 @@ def OLMO3_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False,
   return hooks
 
 
+def MUSE_GLIMMER_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
+  """Returns mapping from MaxText to HuggingFace Muse Glimmer weight paths.
+
+  Text tower only. The vision tower (`model.vision_tower.*`), the adapter
+  (`model.vision_adapter.*`) and the projection (`model.vision_projection.*`)
+  are intentionally unmapped.
+  """
+  text_config = config["text_config"] if "text_config" in config else config
+  n_layers = text_config["num_hidden_layers"]
+  layer_cycle_interval = maxtext_config.inhomogeneous_layer_cycle_interval
+
+  # Muse Glimmer is a conditional-generation wrapper, so the decoder lives under
+  # `model.language_model.` while `lm_head` stays at the top level.
+  mapping = {
+      "params-token_embedder-embedding": "model.language_model.embed_tokens.weight",
+      "params-decoder-decoder_norm-scale": "model.language_model.norm.weight",
+      "params-decoder-logits_dense-kernel": "lm_head.weight",
+  }
+
+  def layer_map(prefix, hf):
+    """`hf` maps an HF suffix to either one path or a list of them."""
+    return {
+        f"{prefix}-attention-query-kernel": hf("self_attn.q_proj.weight"),
+        f"{prefix}-attention-key-kernel": hf("self_attn.k_proj.weight"),
+        f"{prefix}-attention-value-kernel": hf("self_attn.v_proj.weight"),
+        f"{prefix}-attention-out-kernel": hf("self_attn.o_proj.weight"),
+        # Separate output gate, unlike the Qwen3-Next family which packs it into
+        # a double-width query projection.
+        f"{prefix}-attention-attn_gate-kernel": hf("self_attn.gate_proj.weight"),
+        f"{prefix}-mlp-wi_0-kernel": hf("mlp.gate_proj.weight"),
+        f"{prefix}-mlp-wi_1-kernel": hf("mlp.up_proj.weight"),
+        f"{prefix}-mlp-wo-kernel": hf("mlp.down_proj.weight"),
+        # Gemma2-style sandwich: a pre and a post norm around attention and MLP.
+        f"{prefix}-pre_self_attention_layer_norm-scale": hf("input_layernorm.weight"),
+        f"{prefix}-post_self_attention_layer_norm-scale": hf("post_attention_layernorm.weight"),
+        f"{prefix}-pre_mlp_layer_norm-scale": hf("pre_feedforward_layernorm.weight"),
+        f"{prefix}-post_mlp_layer_norm-scale": hf("post_feedforward_layernorm.weight"),
+    }
+
+  if scan_layers:
+    # Scanned: MaxText `layers_k` holds HF layers k, k+cycle, k+2*cycle, ...
+    for cycle_idx in range(layer_cycle_interval):
+      hf_indices = list(range(cycle_idx, n_layers, layer_cycle_interval))
+      prefix = f"params-decoder-layers-layers_{cycle_idx}"
+      mapping.update(  # pyrefly: ignore[no-matching-overload]
+          layer_map(prefix, lambda suf: [f"model.language_model.layers.{i}.{suf}" for i in hf_indices])
+      )
+  else:
+    for i in range(n_layers):
+      prefix = f"params-decoder-layers_{i}"
+      mapping.update(layer_map(prefix, lambda suf, i=i: f"model.language_model.layers.{i}.{suf}"))
+
+  return mapping
+
+
+def MUSE_GLIMMER_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False, saving_to_hf=False):
+  """Creates parameter transformation functions for Muse Glimmer."""
+
+  def reshape_kernel(input_tensor, target_shape):
+    if saving_to_hf:
+      flipped_target_shape = np.flip(np.array(target_shape))
+      return input_tensor.reshape(flipped_target_shape).T
+    else:
+      return input_tensor.T.reshape(target_shape)
+
+  def scale_rmsnorm_layer(input_tensor, target_shape):
+    return input_tensor.reshape(target_shape)
+
+  def pad_hf_embedding_layer(input_tensor, target_shape):
+    source_vocab_size = input_tensor.shape[0]
+    target_vocab_size = target_shape[0]
+    if source_vocab_size == target_vocab_size:
+      return input_tensor
+    if saving_to_hf:
+      return input_tensor[:target_vocab_size, :]
+    padded_tensor = np.zeros(target_shape, dtype=input_tensor.dtype)
+    padded_tensor[:source_vocab_size, :] = input_tensor
+    return padded_tensor
+
+  hooks = {
+      "params-token_embedder-embedding": pad_hf_embedding_layer,
+      "params-decoder-logits_dense-kernel": reshape_kernel,
+      "params-decoder-decoder_norm-scale": scale_rmsnorm_layer,
+  }
+
+  kernel_keys = [
+      "attention-query-kernel",
+      "attention-key-kernel",
+      "attention-value-kernel",
+      "attention-out-kernel",
+      "attention-attn_gate-kernel",
+      "mlp-wi_0-kernel",
+      "mlp-wi_1-kernel",
+      "mlp-wo-kernel",
+  ]
+  norm_keys = [
+      "pre_self_attention_layer_norm-scale",
+      "post_self_attention_layer_norm-scale",
+      "pre_mlp_layer_norm-scale",
+      "post_mlp_layer_norm-scale",
+  ]
+
+  text_config = config["text_config"] if "text_config" in config else config
+  n_layers = text_config["num_hidden_layers"]
+  cycle_len = getattr(maxtext_config, "inhomogeneous_layer_cycle_interval", 4)
+
+  prefixes = (
+      [f"params-decoder-layers-layers_{c}" for c in range(cycle_len)]
+      if scan_layers
+      else [f"params-decoder-layers_{i}" for i in range(n_layers)]
+  )
+  for prefix in prefixes:
+    for key in kernel_keys:
+      hooks[f"{prefix}-{key}"] = reshape_kernel
+    for key in norm_keys:
+      hooks[f"{prefix}-{key}"] = scale_rmsnorm_layer
+
+  return hooks
+
+
 def QWEN3_VL_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
   """Returns mapping from MaxText to HuggingFace Qwen3-VL weight paths."""
   mapping = {}
@@ -4500,6 +4620,7 @@ PARAM_MAPPING = {
     "olmo3-7b": OLMO3_MAXTEXT_TO_HF_PARAM_MAPPING,
     "olmo3-7b-pt": OLMO3_MAXTEXT_TO_HF_PARAM_MAPPING,
     "olmo3-32b": OLMO3_MAXTEXT_TO_HF_PARAM_MAPPING,
+    "muse-glimmer-30b": MUSE_GLIMMER_MAXTEXT_TO_HF_PARAM_MAPPING,
 }
 
 # {maxtext model name: {maxtext weight name: bi-directional transform}}
@@ -4561,6 +4682,7 @@ HOOK_FNS = {
     "olmo3-7b": OLMO3_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "olmo3-7b-pt": OLMO3_MAXTEXT_TO_HF_PARAM_HOOK_FN,
     "olmo3-32b": OLMO3_MAXTEXT_TO_HF_PARAM_HOOK_FN,
+    "muse-glimmer-30b": MUSE_GLIMMER_MAXTEXT_TO_HF_PARAM_HOOK_FN,
 }
 
 VLLM_HOOK_FNS = {

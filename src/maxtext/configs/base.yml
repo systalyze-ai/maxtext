@@ -530,6 +530,17 @@ use_post_attn_norm: false
 use_post_ffw_norm: false
 v_norm_with_scale: true
 qk_norm_with_scale: true
+# Muse Glimmer scales the QK-normed query by this constant in place of the usual
+# 1/sqrt(head_dim) depth scaling. <= 0 keeps the default depth scaling.
+# Gate the attention output with sigmoid(gate_proj(layer_input)) before out projection.
+attention_output_gate: false
+qk_scale_factor: 0.0
+# Muse Glimmer pre-scales logits before the tanh softcap: cap * tanh(logits * mult / cap).
+# <= 0 disables the multiplier.
+output_logits_multiplier: 0.0
+# Epsilon for the post-attention and post-MLP norms when it differs from
+# normalization_layer_epsilon. <= 0 falls back to normalization_layer_epsilon.
+post_norm_eps: 0.0
 mla_naive_kvcache: true
 
 # Gemma 4 small (E2B / E4B) specific config fields.

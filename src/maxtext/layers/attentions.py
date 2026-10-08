@@ -525,6 +525,14 @@ class Attention(nnx.Module):
         if not self.share_kv_projections:
           self.value = self.init_kv_w(inputs_kv_shape=inputs_kv_shape)
     self.out = self.init_out_w(output_dim=inputs_q_shape[-1])
+    # Muse Glimmer gates the attention output with its own projection off the layer
+    # input, unlike Qwen3-Next which packs the gate into the query projection:
+    #   attn_output = attn_output * sigmoid(gate_proj(hidden_states))
+    self.attn_gate = (
+        self.init_query_w(inputs_q_shape=inputs_q_shape)
+        if getattr(self.config, "attention_output_gate", False) and not self.is_vision
+        else None
+    )
 
   def init_query_w(self, inputs_q_shape: Tuple) -> nnx.Module:
     """Query projection initialization."""
@@ -1237,6 +1245,8 @@ class Attention(nnx.Module):
     if self.is_qwen3_hybrid:
       out = out.reshape(batch_size, seq_len, self.config.num_query_heads * self.config.head_dim)
       out = out * jax.nn.sigmoid(gate)
+    if self.attn_gate is not None:
+      out = out * jax.nn.sigmoid(self.attn_gate(inputs_q))
     out = self.out_projection(out, out_sharding=out_sharding)
     if getattr(self.config, "distill_beta", 0.0) > 0.0:
       self.sow(nnx.Intermediate, "out_projection_activations", out)

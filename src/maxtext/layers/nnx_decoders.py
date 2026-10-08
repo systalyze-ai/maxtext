@@ -63,6 +63,7 @@ from maxtext.models import (
     llama4,
     mistral,
     mixtral,
+    muse_glimmer,
     olmo3,
     qwen2,
     qwen3,
@@ -903,6 +904,11 @@ class NNXDecoder(nnx.Module):
         layer_kwargs = {"attention_type": gpt_oss.get_attention_type(layer_id=lyr)}
       elif config.decoder_block == DecoderBlockType.OLMO3:
         layer_kwargs = {"attention_type": olmo3.get_attention_type(layer_id=lyr)}
+      elif config.decoder_block == DecoderBlockType.MUSE_GLIMMER:
+        layer_kwargs = {
+            "attention_type": muse_glimmer.get_attention_type(layer_id=lyr),
+            "nope_layer": muse_glimmer.is_nope_layer(layer_id=lyr),
+        }
 
       self._create_and_register_layer(layer_cls, rngs, "layers", lyr, **layer_kwargs)
 
@@ -1251,6 +1257,9 @@ class NNXDecoder(nnx.Module):
         DecoderBlockType.QWEN3_5: get_scannable(qwen3_5.Qwen3_5DecoderLayer, qwen3_5.Qwen3_5ScannableBlock),
         DecoderBlockType.LLAMA4: get_scannable(llama4.Llama4DecoderLayer, llama4.Llama4ScannableBlock),
         DecoderBlockType.OLMO3: get_scannable(olmo3.Olmo3DecoderLayer, olmo3.Olmo3ScannableBlock),
+        DecoderBlockType.MUSE_GLIMMER: get_scannable(
+            muse_glimmer.MuseGlimmerDecoderLayer, muse_glimmer.MuseGlimmerScannableBlock
+        ),
         DecoderBlockType.ENVY: get_scannable(envy.EnvyDecoderLayer, envy.EnvyScannableBlock),
     }
 
@@ -1413,6 +1422,7 @@ class NNXDecoder(nnx.Module):
         DecoderBlockType.SIMPLE_MLP,
         DecoderBlockType.LLAMA4,
         DecoderBlockType.OLMO3,
+        DecoderBlockType.MUSE_GLIMMER,
         DecoderBlockType.ENVY,
     }:
       return functools.partial(
@@ -1544,6 +1554,15 @@ class NNXDecoder(nnx.Module):
         else:
           raise ValueError(f"Unsupported model_name for audio: {cfg.model_name}")
 
+    if cfg.decoder_block == DecoderBlockType.MUSE_GLIMMER:
+      # HF's MuseGlimmerTextNormedEmbedding normalises the embedding output before the
+      # stack: embed_norm is an RMSNorm with with_scale=False, so it carries no weight
+      # and needs no checkpoint entry. Computed in float32 to match the reference, which
+      # normalises `hidden_states.float()`.
+      y32 = y.astype(jnp.float32)
+      mean_squared = jnp.mean(jnp.square(y32), axis=-1, keepdims=True) + cfg.normalization_layer_epsilon
+      y = (y32 * jnp.power(mean_squared, -0.5)).astype(y.dtype)
+
     y = self.dropout(y, deterministic=deterministic)
     y = y.astype(cfg.dtype)
 
@@ -1613,6 +1632,13 @@ class NNXDecoder(nnx.Module):
         logits = jnp.tanh(logits) * cfg.final_logits_soft_cap
     else:
       logits = self.logits_dense(y, out_sharding=out_sharding)
+      # Muse Glimmer pre-scales logits, then applies the Gemma-style tanh softcap:
+      #   cap * tanh(logits * mult / cap)
+      if cfg.output_logits_multiplier > 0:
+        logits = logits * cfg.output_logits_multiplier
+      if cfg.final_logits_soft_cap:
+        logits = logits / cfg.final_logits_soft_cap
+        logits = jnp.tanh(logits) * cfg.final_logits_soft_cap
 
     if self.config.cast_logits_to_fp32:
       logits = logits.astype(jnp.float32)

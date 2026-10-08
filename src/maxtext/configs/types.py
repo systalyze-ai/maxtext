@@ -312,6 +312,7 @@ ModelName = Literal[
     "olmo3-7b",
     "olmo3-7b-pt",
     "olmo3-32b",
+    "muse-glimmer-30b",
     "envy-test",
     "envy-switch-base",
     "envy-switch-large",
@@ -699,6 +700,34 @@ class ModelArchitecture(BaseModel):
   v_norm_with_scale: bool = Field(
       True,
       description="Whether to apply scale on value normalization (default True).",
+  )
+  attention_output_gate: bool = Field(
+      False,
+      description=(
+          "Gate the attention output with sigmoid(gate_proj(layer_input)) before the out "
+          "projection, using a separate gate projection (Muse Glimmer)."
+      ),
+  )
+  qk_scale_factor: NonNegativeFloat = Field(
+      0.0,
+      description=(
+          "Muse Glimmer scales the QK-normed query by this constant in place of the usual "
+          "1/sqrt(head_dim) depth scaling. <= 0 keeps the default depth scaling."
+      ),
+  )
+  output_logits_multiplier: NonNegativeFloat = Field(
+      0.0,
+      description=(
+          "Muse Glimmer pre-scales logits before the tanh softcap: cap * tanh(logits * mult / cap). "
+          "<= 0 disables the multiplier."
+      ),
+  )
+  post_norm_eps: NonNegativeFloat = Field(
+      0.0,
+      description=(
+          "Epsilon for the post-attention and post-MLP norms when it differs from "
+          "normalization_layer_epsilon. <= 0 falls back to normalization_layer_epsilon."
+      ),
   )
 
 

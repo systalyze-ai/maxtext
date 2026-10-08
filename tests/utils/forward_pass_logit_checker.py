@@ -617,6 +617,12 @@ def main(config, test_args):  # pylint: disable=W0621
       from transformers import Qwen3VLForConditionalGeneration  # pylint: disable=import-outside-toplevel
 
       model_class = Qwen3VLForConditionalGeneration
+    elif "muse-glimmer" in config.model_name.lower():
+      # Muse Glimmer registers as a conditional-generation model, so
+      # AutoModelForCausalLM refuses MuseGlimmerConfig.
+      from transformers import MuseGlimmerForConditionalGeneration  # pylint: disable=import-outside-toplevel
+
+      model_class = MuseGlimmerForConditionalGeneration
     else:
       model_class = AutoModelForCausalLM
 

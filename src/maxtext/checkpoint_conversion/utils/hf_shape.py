@@ -1277,6 +1277,44 @@ def DEEPSEEKV4_HF_WEIGHTS_TO_SHAPE(config):
   return mapping
 
 
+def MUSE_GLIMMER_HF_WEIGHTS_TO_SHAPE(config):
+  """Returns mapping between HuggingFace Muse Glimmer weights path and weights shape.
+
+  Text tower only, matching MUSE_GLIMMER_MAXTEXT_TO_HF_PARAM_MAPPING. The decoder
+  sits under `model.language_model.` while `lm_head` stays at the top level.
+  """
+  text_config = config["text_config"] if "text_config" in config else config
+  hidden_size = text_config["hidden_size"]
+  q_dim = text_config["num_attention_heads"] * text_config["head_dim"]
+  kv_dim = text_config["num_key_value_heads"] * text_config["head_dim"]
+  intermediate_size = text_config["intermediate_size"]
+
+  mapping = {
+      "model.language_model.embed_tokens.weight": [text_config["vocab_size"], hidden_size],
+      "model.language_model.norm.weight": [hidden_size],
+      "lm_head.weight": [text_config["vocab_size"], hidden_size],
+  }
+  for layer_idx in range(text_config["num_hidden_layers"]):
+    prefix = f"model.language_model.layers.{layer_idx}"
+    mapping.update(
+        {
+            f"{prefix}.input_layernorm.weight": [hidden_size],
+            f"{prefix}.post_attention_layernorm.weight": [hidden_size],
+            f"{prefix}.pre_feedforward_layernorm.weight": [hidden_size],
+            f"{prefix}.post_feedforward_layernorm.weight": [hidden_size],
+            f"{prefix}.self_attn.q_proj.weight": [q_dim, hidden_size],
+            f"{prefix}.self_attn.k_proj.weight": [kv_dim, hidden_size],
+            f"{prefix}.self_attn.v_proj.weight": [kv_dim, hidden_size],
+            f"{prefix}.self_attn.o_proj.weight": [hidden_size, q_dim],
+            f"{prefix}.self_attn.gate_proj.weight": [q_dim, hidden_size],
+            f"{prefix}.mlp.gate_proj.weight": [intermediate_size, hidden_size],
+            f"{prefix}.mlp.up_proj.weight": [intermediate_size, hidden_size],
+            f"{prefix}.mlp.down_proj.weight": [hidden_size, intermediate_size],
+        }
+    )
+  return mapping
+
+
 HF_SHAPE = {
     "gemma2-2b": GEMMA2_HF_WEIGHTS_TO_SHAPE,
     "gemma2-9b": GEMMA2_HF_WEIGHTS_TO_SHAPE,
@@ -1323,4 +1361,5 @@ HF_SHAPE = {
     "qwen3.5-397b-a17b": QWEN3_5_HF_WEIGHTS_TO_SHAPE,
     "qwen3.5-397b-a17b-fp8": QWEN3_5_HF_WEIGHTS_TO_SHAPE,
     "qwen3-next-80b-a3b": QWEN3_NEXT_HF_WEIGHTS_TO_SHAPE,
+    "muse-glimmer-30b": MUSE_GLIMMER_HF_WEIGHTS_TO_SHAPE,
 }

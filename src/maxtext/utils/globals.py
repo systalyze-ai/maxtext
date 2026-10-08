@@ -97,6 +97,7 @@ HF_IDS = {
     "olmo3-32b": "allenai/Olmo-3-32B-Think",
     "weaver-mini": "Qwen/Qwen3-VL-4B-Instruct",
     "weaver-max": "Qwen/Qwen3-VL-8B-Instruct",
+    "muse-glimmer-30b": "meta-models/Muse-Glimmer-30B",
     # "default" is not HF model, but adding to to avoid confusing warning about tokenizer_path
     "default": os.path.join(MAXTEXT_ASSETS_ROOT, "tokenizers/tokenizer.llama2"),
 }

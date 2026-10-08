@@ -84,6 +84,12 @@ def save_golden_logits(
     from transformers import Qwen3VLForConditionalGeneration  # pylint: disable=import-outside-toplevel
 
     model_class = Qwen3VLForConditionalGeneration
+  elif "muse-glimmer" in model_id.lower():
+    # Muse Glimmer registers as a conditional-generation model, so
+    # AutoModelForCausalLM refuses MuseGlimmerConfig.
+    from transformers import MuseGlimmerForConditionalGeneration  # pylint: disable=import-outside-toplevel
+
+    model_class = MuseGlimmerForConditionalGeneration
   else:
     from transformers import AutoModelForCausalLM  # pylint: disable=import-outside-toplevel
 

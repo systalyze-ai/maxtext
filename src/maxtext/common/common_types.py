@@ -139,6 +139,7 @@ class DecoderBlockType(enum.Enum):
   SIMPLE_MLP = "simple_mlp"
   LLAMA4 = "llama4"
   OLMO3 = "olmo3"
+  MUSE_GLIMMER = "muse_glimmer"
   DEEPSEEK4 = "deepseek4"
   ENVY = "envy"
 
